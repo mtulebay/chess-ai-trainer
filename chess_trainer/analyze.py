@@ -8,6 +8,7 @@ import chess
 import chess.engine
 import chess.pgn
 
+ANALYSIS_VERSION = 2   # 2: multipv=2 (second_eval), uci-ходы
 MATE_CP = 10_000
 CLIP_CP = 1_000          # оценки обрезаются до ±10 пешек: дальше разница уже не важна
 LINE_PLIES = 6
@@ -141,12 +142,23 @@ def analyse_pgn(pgn_text: str, my_color: str, engine: chess.engine.SimpleEngine,
     nodes = list(game.mainline())
     # Оценка каждой позиции один раз: «после хода i» == «до хода i+1».
     infos: list[chess.engine.InfoDict | None] = []
+    seconds: list[chess.engine.InfoDict | None] = []
+
+    def run(b: chess.Board) -> None:
+        if b.is_game_over():
+            infos.append(None)
+            seconds.append(None)
+            return
+        res = engine.analyse(b, limit, multipv=2)  # второй вариант нужен для «единственного хода»
+        infos.append(res[0])
+        seconds.append(res[1] if len(res) > 1 else None)
+
     boards: list[chess.Board] = [board.copy()]
-    infos.append(None if board.is_game_over() else engine.analyse(board, limit))
+    run(board)
     for node in nodes:
         board.push(node.move)
         boards.append(board.copy())
-        infos.append(None if board.is_game_over() else engine.analyse(board, limit))
+        run(board)
 
     last_clock = {chess.WHITE: base, chess.BLACK: base}
     out: list[dict] = []
@@ -181,6 +193,9 @@ def analyse_pgn(pgn_text: str, my_color: str, engine: chess.engine.SimpleEngine,
             "is_mine": int(mover == mine),
             "san": before.san(played),
             "best_san": before.san(best) if best else None,
+            "uci": played.uci(),
+            "best_uci": best.uci() if best else None,
+            "second_eval": score_cp(seconds[i], mover) if seconds[i] is not None else None,
             "eval_before": ev_b,
             "eval_after": ev_a,
             "loss": loss,

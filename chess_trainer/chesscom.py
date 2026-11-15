@@ -82,3 +82,24 @@ def fetch_games(user: str, months: int = 2, session: requests.Session | None = N
             g = normalize(raw, user)
             if g:
                 yield g
+
+
+STATS = "https://api.chess.com/pub/player/{user}/stats"
+
+
+def fetch_stats(user: str, session: requests.Session | None = None) -> dict:
+    """Текущий/лучший рейтинг и счёт по контролям: {'rapid': {'rating':.., 'best':.., 'win':..}, ...}."""
+    session = session or requests.Session()
+    raw = _get(STATS.format(user=user), session).json()
+    out = {}
+    for key, val in raw.items():
+        if not key.startswith("chess_"):
+            continue
+        tc = key.removeprefix("chess_")
+        rec = val.get("record", {})
+        out[tc] = {
+            "rating": val.get("last", {}).get("rating"),
+            "best": val.get("best", {}).get("rating"),
+            "win": rec.get("win", 0), "loss": rec.get("loss", 0), "draw": rec.get("draw", 0),
+        }
+    return out

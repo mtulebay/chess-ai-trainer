@@ -67,7 +67,15 @@ def main(argv: list[str] | None = None) -> None:
     pr = sub.add_parser("profile", help="пересчитать профиль слабых мест")
     pr.add_argument("--narrative", action="store_true", help="переписать текст профиля через LLM")
     pr.add_argument("--send", action="store_true")
+    u = sub.add_parser("ui", help="открыть веб-интерфейс")
+    u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--no-browser", action="store_true")
     args = p.parse_args(argv)
+
+    if args.cmd == "ui":
+        from .web import serve
+        serve(port=args.port, open_browser=not args.no_browser)
+        return
 
     if args.cmd == "setup-engine":
         print(f"Stockfish: {download_stockfish()}")

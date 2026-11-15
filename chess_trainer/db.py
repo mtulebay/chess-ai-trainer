@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+ANALYSIS_VERSION = 2  # синхронно с analyze.ANALYSIS_VERSION
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS games (
     id            TEXT PRIMARY KEY,
@@ -68,11 +70,53 @@ CREATE TABLE IF NOT EXISTS profile_snapshots (
 """
 
 
-def connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+MIGRATIONS = [
+    ("moves", "uci", "TEXT"),
+    ("moves", "best_uci", "TEXT"),
+    ("moves", "second_eval", "INTEGER"),
+    ("games", "analysis_version", "INTEGER"),
+]
+
+EXTRA_SCHEMA = """
+CREATE TABLE IF NOT EXISTS game_notes (
+    game_id  TEXT NOT NULL,
+    kind     TEXT NOT NULL,         -- 'report' | 'explain:<ply>'
+    text     TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (game_id, kind)
+);
+CREATE TABLE IF NOT EXISTS openings (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    name   TEXT NOT NULL,
+    color  TEXT NOT NULL,           -- 'white' | 'black'
+    match  TEXT,                    -- подстрока для поиска в названии дебюта Chess.com
+    notes  TEXT
+);
+CREATE TABLE IF NOT EXISTS opening_resources (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    opening_id INTEGER NOT NULL REFERENCES openings(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL,
+    url        TEXT NOT NULL,
+    kind       TEXT,                -- video | article | course
+    lang       TEXT,
+    why        TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE (opening_id, url)
+);
+"""
+
+
+def connect(path: Path, check_same_thread: bool = True) -> sqlite3.Connection:
+    conn = sqlite3.connect(path, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    conn.executescript(EXTRA_SCHEMA)
+    for table, col, typ in MIGRATIONS:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    conn.commit()
     return conn
 
 
@@ -111,15 +155,17 @@ def save_analysis(conn: sqlite3.Connection, game_id: str, depth: int, moves: lis
         conn.execute(
             """INSERT INTO moves (game_id, ply, move_no, side, is_mine, san, best_san, eval_before,
                eval_after, loss, label, decided, phase, clock_left, time_spent, low_clock, best_line,
-               reply_line, material_lost, motifs, missed_punish, fen_before)
+               reply_line, material_lost, motifs, missed_punish, fen_before, uci, best_uci, second_eval)
                VALUES (:game_id, :ply, :move_no, :side, :is_mine, :san, :best_san, :eval_before,
                :eval_after, :loss, :label, :decided, :phase, :clock_left, :time_spent, :low_clock,
-               :best_line, :reply_line, :material_lost, :motifs, :missed_punish, :fen_before)""",
-            row,
+               :best_line, :reply_line, :material_lost, :motifs, :missed_punish, :fen_before,
+               :uci, :best_uci, :second_eval)""",
+            {"uci": None, "best_uci": None, "second_eval": None, **row},
         )
     conn.execute(
-        "UPDATE games SET analyzed = 1, analysis_depth = ?, analysis_error = NULL WHERE id = ?",
-        (depth, game_id),
+        "UPDATE games SET analyzed = 1, analysis_depth = ?, analysis_error = NULL, analysis_version = ? "
+        "WHERE id = ?",
+        (depth, ANALYSIS_VERSION, game_id),
     )
     conn.commit()
 
