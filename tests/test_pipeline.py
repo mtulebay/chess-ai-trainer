@@ -37,6 +37,7 @@ def cfg(tmp_path_factory, monkeypatch_module):
     monkeypatch_module.setenv("CHESSCOM_USERNAME", "me")
     monkeypatch_module.setenv("TELEGRAM_BOT_TOKEN", "")
     monkeypatch_module.setenv("ENGINE_DEPTH", "10")
+    monkeypatch_module.setenv("ENGINE_THREADS", "1")  # детерминированный поиск
     return load_config()
 
 

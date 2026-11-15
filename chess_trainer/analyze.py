@@ -218,11 +218,18 @@ def _explain(rec: dict, before: chess.Board, after: chess.Board, pv_best: list[c
     pv_reply = (info_a or {}).get("pv", []) if info_a else []
     rec["reply_line"] = line_san(after, pv_reply) if pv_reply else None
 
-    # Материал: где оказываемся через несколько полуходов после лучшего хода и после сыгранного + ответа.
-    after_best = play_line(before, pv_best, LINE_PLIES)
-    after_played = play_line(after, pv_reply, LINE_PLIES - 1)
-    diff = material_balance(after_best, mover) - material_balance(after_played, mover)
-    rec["material_lost"] = float(diff) if diff > 0 else 0.0
+    # Материал: сколько форсированно теряется после сыгранного хода и сколько давал лучший.
+    # Линию соперника обрезаем на чётном числе полуходов, чтобы она заканчивалась нашим ходом
+    # (иначе размен «посередине» выглядит как потеря фигуры).
+    start = material_balance(before, mover)
+    reply_plies = min(len(pv_reply), LINE_PLIES) // 2 * 2
+    if reply_plies == 0 and pv_reply:
+        reply_plies = 1  # единственный ход соперника (например, мат)
+    after_played = play_line(after, pv_reply, reply_plies)
+    after_best = play_line(before, pv_best, (min(len(pv_best), LINE_PLIES + 1) - 1) // 2 * 2 + 1)
+    lost = start - material_balance(after_played, mover)
+    rec["material_lost"] = float(max(0, lost))
+    best_gain = material_balance(after_best, mover) - start
 
     # Мат: пропустил свой или разрешил соперника.
     m_before = mate_in(info_b, mover)
@@ -249,6 +256,7 @@ def _explain(rec: dict, before: chess.Board, after: chess.Board, pv_best: list[c
             if b2.is_check():
                 motifs.append("opponent_check_reply")
     # Лучший ход выигрывал материал, а сыгранный — нет.
-    if pv_best and (material_balance(after_best, mover) - material_balance(before, mover)) >= 2 and diff >= 2:
+    played_gain = -lost
+    if pv_best and best_gain >= 2 and best_gain - played_gain >= 2:
         motifs.append("missed_material_win")
     rec["motifs"] = motifs
