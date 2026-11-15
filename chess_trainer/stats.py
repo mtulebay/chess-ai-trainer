@@ -30,6 +30,8 @@ def load_moves(conn: sqlite3.Connection, game_id: str) -> list[dict]:
 
 
 def _motif_key(m: str) -> str:
+    if m.startswith("hung_пешка"):
+        return "hung_pawn"
     if m.startswith("hung_"):
         return "hung_piece"
     if m.startswith("double_attack"):
@@ -100,8 +102,6 @@ def compute_stats(conn: sqlite3.Connection, since: int, until: int, exclude: set
                     first_err = m["move_no"]
                 for mt in m["motifs"]:
                     motifs[_motif_key(mt)] += 1
-            if m["missed_punish"]:
-                motifs["missed_punish"] += 1
             if base and m["time_spent"] and m["time_spent"] > 0.15 * base:
                 think_long += 1
             best_eval = max(best_eval, m["eval_after"] if m["eval_after"] is not None else -10_000)

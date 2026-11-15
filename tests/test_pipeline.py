@@ -145,3 +145,13 @@ def test_broken_binary_skipped(cfg, tmp_path, monkeypatch):
     bad.write_bytes(b"\x7fELFgarbage")
     bad.chmod(0o755)
     assert not eng._runs(str(bad))
+
+
+def test_missed_punish_counted_once(cfg, engine):
+    from chess_trainer.stats import compute_stats
+    conn = db.connect(cfg.db_path)
+    now = int(time.time())
+    total = conn.execute("""SELECT COUNT(*) FROM moves m JOIN games g ON g.id = m.game_id
+        WHERE m.is_mine = 1 AND m.missed_punish = 1 AND m.decided = 0 AND g.time_class != 'bullet'""").fetchone()[0]
+    s = compute_stats(conn, now - 86400, now, {"bullet"})
+    assert s["motifs"].get("missed_punish", 0) == total
