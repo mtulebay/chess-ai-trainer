@@ -1,0 +1,9 @@
+# crontab -e  и вставьте (поменяйте путь). Время — по часовому поясу сервера;
+# можно задать свой: CRON_TZ=Europe/Moscow (работает в cronie / systemd-cron; в Debian cron — нет).
+PATH=/usr/local/bin:/usr/bin:/bin
+# Если LLM_BACKEND=claude-cli — добавьте сюда каталог с бинарником `claude` (which claude).
+
+# Вечерний разбор каждый день в 22:30
+30 22 * * *  /home/USER/chess-ai-trainer/scripts/run.sh daily
+# Недельная сводка + переписанный профиль слабых мест — пятница 21:00
+0 21 * * 5   /home/USER/chess-ai-trainer/scripts/run.sh weekly
