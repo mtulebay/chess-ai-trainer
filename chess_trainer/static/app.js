@@ -13,7 +13,7 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || r.statusText);
+  if (!r.ok) throw new Error(data.error || (data.stale ? "stale" : r.statusText));
   return data;
 }
 function toast(msg, ms = 3500) {
@@ -25,6 +25,63 @@ function date(ts) { return new Date(ts * 1000).toLocaleDateString("ru-RU", { day
 async function busy(btn, fn) {
   const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span> ${old}`;
   try { return await fn(); } catch (e) { toast(e.message, 6000); } finally { btn.disabled = false; btn.innerHTML = old; }
+}
+
+// ---------------- доска (рисуется в браузере, мгновенно) ----------------
+let PIECES = null;
+async function loadPieces() {
+  if (!PIECES) {
+    const raw = await api("/api/pieces");
+    PIECES = {};
+    for (const [k, v] of Object.entries(raw)) PIECES[k] = v.replace(/ id="[^"]*"/g, "").replace(/<svg /, "<svg width=\"45\" height=\"45\" ");
+  }
+  return PIECES;
+}
+const LIGHT = "#eeeed2", DARK = "#769656", LAST_L = "#f6f669", LAST_D = "#baca2b";
+function sqXY(sq, flip) {
+  let f = sq.charCodeAt(0) - 97, r = +sq[1] - 1;
+  if (flip) { f = 7 - f; r = 7 - r; }
+  return [15 + f * 45, 15 + (7 - r) * 45];
+}
+function boardSvg(fen, { flip = false, last = "", sel = null, arrows = [] } = {}) {
+  const rows = fen.split(" ")[0].split("/");
+  const lastSq = last ? [last.slice(0, 2), last.slice(2, 4)] : [];
+  let out = `<svg viewBox="0 0 390 390" xmlns="http://www.w3.org/2000/svg"><rect width="390" height="390" fill="#262421"/>`;
+  for (let r = 7; r >= 0; r--) for (let f = 0; f < 8; f++) {
+    const sq = String.fromCharCode(97 + f) + (r + 1);
+    const [x, y] = sqXY(sq, flip);
+    const light = (f + r) % 2 === 1;
+    let fill = lastSq.includes(sq) ? (light ? LAST_L : LAST_D) : (light ? LIGHT : DARK);
+    out += `<rect x="${x}" y="${y}" width="45" height="45" fill="${fill}"/>`;
+    if (sq === sel) out += `<rect x="${x}" y="${y}" width="45" height="45" fill="#f7d94c" opacity=".75"/>`;
+  }
+  for (let i = 0; i < 8; i++) {
+    const file = String.fromCharCode(97 + (flip ? 7 - i : i)), rank = flip ? i + 1 : 8 - i;
+    out += `<text x="${37.5 + i * 45}" y="11" font-size="10" text-anchor="middle" fill="#ccc">${file}</text>`;
+    out += `<text x="${37.5 + i * 45}" y="386" font-size="10" text-anchor="middle" fill="#ccc">${file}</text>`;
+    out += `<text x="7.5" y="${41 + i * 45}" font-size="10" text-anchor="middle" fill="#ccc">${rank}</text>`;
+    out += `<text x="382.5" y="${41 + i * 45}" font-size="10" text-anchor="middle" fill="#ccc">${rank}</text>`;
+  }
+  rows.forEach((row, ri) => {
+    let f = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) { f += +ch; continue; }
+      const sq = String.fromCharCode(97 + f) + (8 - ri);
+      const [x, y] = sqXY(sq, flip);
+      out += `<g transform="translate(${x},${y})">${PIECES[ch]}</g>`;
+      f++;
+    }
+  });
+  arrows.forEach((a, i) => {
+    const [x1, y1] = sqXY(a.slice(0, 2), flip), [x2, y2] = sqXY(a.slice(2, 4), flip);
+    const ax = x1 + 22.5, ay = y1 + 22.5, bx = x2 + 22.5, by = y2 + 22.5;
+    const len = Math.hypot(bx - ax, by - ay) || 1, ux = (bx - ax) / len, uy = (by - ay) / len;
+    const hx = bx - ux * 14, hy = by - uy * 14, px = -uy * 9, py = ux * 9;
+    const col = i === 0 ? "#15781b" : "#2b6cb0";
+    out += `<g opacity=".8"><line x1="${ax}" y1="${ay}" x2="${hx}" y2="${hy}" stroke="${col}" stroke-width="8" stroke-linecap="round"/>
+      <polygon points="${bx},${by} ${hx + px},${hy + py} ${hx - px},${hy - py}" fill="${col}"/></g>`;
+  });
+  return out + "</svg>";
 }
 
 // ---------------- роутер ----------------
@@ -107,6 +164,7 @@ async function gamesList(tc = "rapid") {
 
 // ---------------- партия ----------------
 async function gameView(id) {
+  await loadPieces();
   let g = await api(`/api/game/${encodeURIComponent(id)}`);
   if (!g.analyzed || g.outdated) {
     app.innerHTML = `<div class="panel" style="max-width:520px;margin:40px auto;text-align:center">
@@ -146,7 +204,7 @@ async function gameView(id) {
         <div class="player" id="pTop"></div>
         <div class="boardwrap">
           <div class="evalbar" id="evalbar"><div class="w" id="evalw"></div><div class="t" id="evalt"></div></div>
-          <div class="board" id="board"><img id="boardImg" alt="доска"></div>
+          <div class="board" id="board"><div id="boardSvg"></div></div>
         </div>
         <div class="player" id="pBot"></div>
         <div class="controls">
@@ -185,9 +243,7 @@ async function gameView(id) {
   function drawBoard() {
     const arrows = [];
     if (st.showArrows && st.lines.length && st.linesFen === curFen()) arrows.push(st.lines[0].uci[0]);
-    const q = new URLSearchParams({ fen: curFen(), flip: st.flip ? "1" : "0", last: lastUci(), arrows: arrows.join(",") });
-    if (st.sel) q.set("sel", st.sel);
-    $("#boardImg").src = `/api/board.svg?${q}`;
+    $("#boardSvg").innerHTML = boardSvg(curFen(), { flip: st.flip, last: lastUci(), sel: st.sel, arrows });
     const top = st.flip ? "white" : "black", bot = st.flip ? "black" : "white";
     $("#pTop").innerHTML = `<span>${name(top)}</span><span>${clockAt(top)}</span>`;
     $("#pBot").innerHTML = `<span>${name(bot)}</span><span>${clockAt(bot)}</span>`;
@@ -305,7 +361,7 @@ async function gameView(id) {
     st.vari = null; st.idx = Math.round(((e.clientX - r.left) / r.width) * g.moves.length); update();
   };
 
-  let linesTimer = null, linesReq = 0;
+  let linesTimer = null, linesReq = 0, linesAbort = null;
   function lines() {
     const fen = curFen();
     const box = $("#lines");
@@ -313,13 +369,18 @@ async function gameView(id) {
     box.innerHTML = `<div class="muted small" style="padding:8px 4px"><span class="spin"></span> считаю…</div>`;
     clearTimeout(linesTimer);
     const req = ++linesReq;
+    if (linesAbort) linesAbort.abort();
     linesTimer = setTimeout(async () => {
+      linesAbort = new AbortController();
       try {
-        const ls = await api("/api/lines", { method: "POST", body: { fen, multipv: 3 } });
+        const ls = await api("/api/lines", { method: "POST", body: { fen, multipv: 3, live: true }, signal: linesAbort.signal });
         if (req !== linesReq) return;
         st.lines = ls; st.linesFen = fen; renderLines(); drawBoard();
-      } catch (e) { box.innerHTML = `<div class="muted small">${esc(e.message)}</div>`; }
-    }, 250);
+      } catch (e) {
+        if (e.name === "AbortError" || req !== linesReq || /stale/i.test(e.message)) return;
+        box.innerHTML = `<div class="muted small">${esc(e.message)}</div>`;
+      }
+    }, 300);
   }
   function renderLines() {
     const box = $("#lines");
@@ -342,8 +403,8 @@ async function gameView(id) {
   function update() { drawBoard(); moveCard(); moveList(); graph(); lines(); }
 
   // ходы мышью по доске
-  $("#boardImg").onclick = async (e) => {
-    const r = e.target.getBoundingClientRect();
+  $("#boardSvg").onclick = async (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
     let f = Math.floor((((e.clientX - r.left) / r.width) * 390 - 15) / 45);
     let rk = 7 - Math.floor((((e.clientY - r.top) / r.height) * 390 - 15) / 45);
     if (f < 0 || f > 7 || rk < 0 || rk > 7) return;

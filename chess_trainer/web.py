@@ -34,6 +34,8 @@ class Engine:
         self.cfg = cfg
         self.lock = threading.Lock()
         self._eng: chess.engine.SimpleEngine | None = None
+        self._gen = 0                     # номер последнего «живого» запроса с доски
+        self._gen_lock = threading.Lock()
 
     def get(self) -> chess.engine.SimpleEngine:
         if self._eng is None:
@@ -49,16 +51,26 @@ class Engine:
                 pass
             self._eng = None
 
-    def lines(self, fen: str, depth: int, multipv: int = 3) -> list[dict]:
+    def lines(self, fen: str, depth: int, multipv: int = 3, interactive: bool = False) -> list[dict] | None:
+        """Варианты для позиции. interactive=True — запрос с доски: если пока ждали движок, пользователь
+        уже ушёл на другую позицию, не считаем (вернём None), иначе запросы копятся и доска «залипает»."""
         board = chess.Board(fen)
         if board.is_game_over():
             return []
+        if interactive:
+            with self._gen_lock:
+                self._gen += 1
+                my = self._gen
+        # Время ограничено, чтобы листание по партии не ждало глубокого счёта.
+        limit = chess.engine.Limit(depth=depth, time=3.0 if interactive else None)
         with self.lock:
+            if interactive and my != self._gen:
+                return None
             try:
-                res = self.get().analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
+                res = self.get().analyse(board, limit, multipv=multipv)
             except chess.engine.EngineTerminatedError:
                 self._eng = None
-                res = self.get().analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
+                res = self.get().analyse(board, limit, multipv=multipv)
         out = []
         for info in res:
             pv = info.get("pv", [])[:10]
@@ -356,7 +368,16 @@ def create_app(cfg: Config | None = None) -> Flask:
     def lines():
         body = request.get_json(force=True)
         depth = min(int(body.get("depth") or cfg.depth), 22)
-        return jsonify(engine.lines(body["fen"], depth, int(body.get("multipv", 3))))
+        res = engine.lines(body["fen"], depth, int(body.get("multipv", 3)), interactive=bool(body.get("live")))
+        if res is None:
+            return jsonify({"stale": True}), 409
+        return jsonify(res)
+
+    @app.get("/api/pieces")
+    def pieces():
+        """SVG фигур — доска рисуется в браузере, без запроса к серверу на каждый ход."""
+        return jsonify({p.symbol(): chess.svg.piece(p) for p in
+                        (chess.Piece(t, c) for t in chess.PIECE_TYPES for c in chess.COLORS)})
 
     @app.post("/api/move")
     def move():
