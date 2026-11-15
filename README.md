@@ -18,10 +18,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env   # заполнить ник, токен бота, chat_id
 ```
 
-Stockfish: `apt install stockfish`, а без прав root:
+Stockfish: на macOS `brew install stockfish`, на Linux `apt install stockfish`. Без прав root можно скачать релиз с GitHub в `./bin`:
 
 ```bash
-.venv/bin/python -m chess_trainer setup-engine   # скачает релиз с GitHub в ./bin
+.venv/bin/python -m chess_trainer setup-engine
 ```
 
 Проверка и первый прогон:
@@ -29,10 +29,13 @@ Stockfish: `apt install stockfish`, а без прав root:
 ```bash
 .venv/bin/python -m chess_trainer check
 .venv/bin/python -m chess_trainer fetch --months 3
-.venv/bin/python -m chess_trainer analyze          # первый раз долго: ~10–30 с на партию
+.venv/bin/python -m chess_trainer analyze --days 30
 .venv/bin/python -m chess_trainer profile --narrative
-.venv/bin/python -m chess_trainer daily --dry-run   # напечатать вместо отправки
+.venv/bin/python -m chess_trainer daily --dry-run
 ```
+
+Анализ занимает ~10–30 с на партию, поэтому `daily`/`weekly` анализируют только последние `PROFILE_WINDOW_DAYS` дней.
+Старую историю при желании догоняйте вручную: `analyze --limit 200`.
 
 Telegram: создать бота у @BotFather → токен; написать боту любое сообщение и взять `chat.id` из
 `https://api.telegram.org/bot<TOKEN>/getUpdates`.

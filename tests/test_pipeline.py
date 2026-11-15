@@ -121,3 +121,22 @@ def test_daily_and_weekly_end_to_end(cfg, engine):
     text = reports.run_daily(conn, cfg, now=now)
     assert "Nf6" in text and "Qxe5+" in text
     assert reports.run_weekly(conn, cfg, now=now)
+
+
+def test_pick_asset_macos(monkeypatch):
+    from chess_trainer import engine as eng
+    assets = [{"name": n} for n in ["stockfish-ubuntu-x86-64-avx2.tar", "stockfish-macos-m1-apple-silicon.tar",
+                                    "stockfish-macos-x86-64-avx2.tar", "stockfish-windows-x86-64.zip"]]
+    monkeypatch.setattr(eng.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(eng.platform, "machine", lambda: "arm64")
+    assert eng._pick_asset(assets)["name"] == "stockfish-macos-m1-apple-silicon.tar"
+    monkeypatch.setattr(eng.platform, "machine", lambda: "x86_64")
+    assert eng._pick_asset(assets)["name"] == "stockfish-macos-x86-64-avx2.tar"
+
+
+def test_broken_binary_skipped(cfg, tmp_path, monkeypatch):
+    from chess_trainer import engine as eng
+    bad = tmp_path / "stockfish"
+    bad.write_bytes(b"\x7fELFgarbage")
+    bad.chmod(0o755)
+    assert not eng._runs(str(bad))

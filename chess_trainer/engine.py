@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import stat
+import subprocess
 import tarfile
 import tempfile
 import zipfile
@@ -20,16 +21,29 @@ RELEASES = "https://api.github.com/repos/official-stockfish/Stockfish/releases/l
 
 
 def find_stockfish(cfg: Config) -> str:
-    candidates = [cfg.stockfish_path, shutil.which("stockfish") or "", "/usr/games/stockfish",
-                  "/usr/local/bin/stockfish"]
+    candidates = [cfg.stockfish_path, shutil.which("stockfish") or "", "/opt/homebrew/bin/stockfish",
+                  "/usr/local/bin/stockfish", "/usr/games/stockfish"]
     candidates += [str(p) for p in sorted(BIN_DIR.glob("stockfish*")) if p.is_file()]
-    for c in candidates:
-        if c and Path(c).is_file() and os.access(c, os.X_OK):
-            return c
+    broken = []
+    for c in dict.fromkeys(c for c in candidates if c):
+        if Path(c).is_file() and os.access(c, os.X_OK):
+            if _runs(c):
+                return c
+            broken.append(c)
+    hint = (f" Найдены, но не запускаются (не та платформа?): {', '.join(broken)}." if broken else "")
     raise FileNotFoundError(
-        "Stockfish не найден. Поставьте его (apt install stockfish), укажите STOCKFISH_PATH "
-        "или выполните: python -m chess_trainer setup-engine"
+        "Stockfish не найден." + hint + " macOS: brew install stockfish; Linux: apt install stockfish; "
+        "или укажите STOCKFISH_PATH, или выполните: python -m chess_trainer setup-engine"
     )
+
+
+def _runs(path: str) -> bool:
+    """Бинарник реально запускается на этой машине (а не собран под другую ОС/процессор)."""
+    try:
+        out = subprocess.run([path], input="uci\nquit\n", capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return "uciok" in out.stdout
 
 
 def open_engine(cfg: Config) -> chess.engine.SimpleEngine:
@@ -49,27 +63,37 @@ def _cpu_flags() -> set[str]:
 
 
 def _pick_asset(assets: list[dict]) -> dict:
+    system = platform.system()
     machine = platform.machine().lower()
     names = {a["name"]: a for a in assets}
-    if machine in ("aarch64", "arm64"):
-        prefs = ["stockfish-android-armv8.tar", "stockfish-ubuntu-armv8.tar"]
+    arm = machine in ("aarch64", "arm64")
+    if system == "Darwin":
+        os_key = "macos"
+        prefs = [n for n in names if "macos" in n and ("apple-silicon" in n or "m1" in n)] if arm else []
+        if not arm:
+            prefs = [n for k in ("x86-64-bmi2", "x86-64-avx2", "x86-64.tar") for n in names
+                     if "macos" in n and k in n]
+    elif system == "Linux":
+        os_key = "ubuntu"
+        if arm:
+            prefs = ["stockfish-android-armv8.tar", "stockfish-ubuntu-armv8.tar"]
+        else:
+            flags = _cpu_flags()
+            prefs = []
+            if {"avx2", "bmi2"} <= flags:
+                prefs.append("stockfish-ubuntu-x86-64-bmi2.tar")
+            if "avx2" in flags:
+                prefs.append("stockfish-ubuntu-x86-64-avx2.tar")
+            if "sse4_1" in flags and "popcnt" in flags:
+                prefs.append("stockfish-ubuntu-x86-64-sse41-popcnt.tar")
+            prefs.append("stockfish-ubuntu-x86-64.tar")
     else:
-        flags = _cpu_flags()
-        prefs = []
-        if {"avx2", "bmi2"} <= flags:
-            prefs.append("stockfish-ubuntu-x86-64-bmi2.tar")
-        if "avx2" in flags:
-            prefs.append("stockfish-ubuntu-x86-64-avx2.tar")
-        if "sse4_1" in flags and "popcnt" in flags:
-            prefs.append("stockfish-ubuntu-x86-64-sse41-popcnt.tar")
-        prefs.append("stockfish-ubuntu-x86-64.tar")
+        raise RuntimeError(f"Автоскачивание не поддерживает {system}; поставьте Stockfish вручную")
     for p in prefs:
         if p in names:
             return names[p]
-    linux = [a for a in assets if "ubuntu" in a["name"] or "linux" in a["name"]]
-    if not linux:
-        raise RuntimeError("В релизе нет сборки под Linux: " + ", ".join(names))
-    return linux[0]
+    raise RuntimeError(f"В релизе нет подходящей сборки для {system}/{machine}: "
+                       + ", ".join(n for n in names if os_key in n))
 
 
 def download_stockfish() -> Path:
@@ -99,4 +123,7 @@ def download_stockfish() -> Path:
         target = BIN_DIR / "stockfish"
         shutil.copy2(bins[0], target)
     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    if not _runs(str(target)):
+        target.unlink()
+        raise RuntimeError(f"Скачанный {asset['name']} не запускается на этой машине")
     return target

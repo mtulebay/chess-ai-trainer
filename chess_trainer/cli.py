@@ -20,12 +20,14 @@ def cmd_fetch(cfg: Config, conn, months: int) -> int:
     return new
 
 
-def cmd_analyze(cfg: Config, conn, limit: int | None = None, retry_failed: bool = False) -> int:
+def cmd_analyze(cfg: Config, conn, limit: int | None = None, retry_failed: bool = False,
+                days: int | None = None) -> int:
     states = "(0, -1)" if retry_failed else "(0)"
     excl = tuple(cfg.exclude_time_classes) or ("",)
     q = (f"SELECT id, pgn, color, time_control FROM games WHERE analyzed IN {states} "
-         f"AND time_class NOT IN ({','.join('?' * len(excl))}) ORDER BY end_time DESC")
-    rows = conn.execute(q, excl).fetchall()
+         f"AND time_class NOT IN ({','.join('?' * len(excl))}) AND end_time >= ? ORDER BY end_time DESC")
+    since = int(time.time()) - days * 86400 if days else 0
+    rows = conn.execute(q, (*excl, since)).fetchall()
     if limit:
         rows = rows[:limit]
     if not rows:
@@ -57,6 +59,7 @@ def main(argv: list[str] | None = None) -> None:
     a = sub.add_parser("analyze", help="проанализировать новые партии")
     a.add_argument("--limit", type=int)
     a.add_argument("--retry-failed", action="store_true")
+    a.add_argument("--days", type=int, help="только партии за последние N дней (по умолчанию все)")
     d = sub.add_parser("daily", help="загрузить, проанализировать, прислать вечерний разбор")
     d.add_argument("--dry-run", action="store_true", help="не отправлять в Telegram, напечатать")
     w = sub.add_parser("weekly", help="недельная сводка + обновление профиля")
@@ -74,16 +77,23 @@ def main(argv: list[str] | None = None) -> None:
     conn = db.connect(cfg.db_path)
 
     if args.cmd == "check":
-        print(f"ник: {cfg.username or '—'}\nstockfish: {find_stockfish(cfg)}\n"
+        try:
+            sf = find_stockfish(cfg)
+        except FileNotFoundError as e:
+            sf = f"НЕТ — {e}"
+        print(f"ник: {cfg.username or '—'}\nstockfish: {sf}\n"
               f"telegram: {'да' if cfg.tg_token and cfg.tg_chat_id else 'нет'}\n"
               f"LLM: {reports.coach._resolve_backend(cfg)}\nБД: {cfg.db_path}")
+        pending = conn.execute("SELECT time_class, COUNT(*) n FROM games WHERE analyzed = 0 GROUP BY 1").fetchall()
+        if pending:
+            print("не проанализировано: " + ", ".join(f"{r['time_class']} {r['n']}" for r in pending))
     elif args.cmd == "fetch":
         cmd_fetch(cfg, conn, args.months)
     elif args.cmd == "analyze":
-        cmd_analyze(cfg, conn, args.limit, args.retry_failed)
+        cmd_analyze(cfg, conn, args.limit, args.retry_failed, args.days)
     elif args.cmd == "daily":
         cmd_fetch(cfg, conn, 2)
-        cmd_analyze(cfg, conn)
+        cmd_analyze(cfg, conn, days=cfg.profile_window_days)
         reports.update_profile(conn, cfg, with_narrative=False)  # цифры профиля — каждый день
         text = reports.run_daily(conn, cfg)
         if text is None:
@@ -94,7 +104,7 @@ def main(argv: list[str] | None = None) -> None:
             telegram.send(cfg.tg_token, cfg.tg_chat_id, text)
     elif args.cmd == "weekly":
         cmd_fetch(cfg, conn, 2)
-        cmd_analyze(cfg, conn)
+        cmd_analyze(cfg, conn, days=cfg.profile_window_days)
         text = reports.run_weekly(conn, cfg)
         if text is None:
             print("[weekly] за неделю партий не было")
