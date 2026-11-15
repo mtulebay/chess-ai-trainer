@@ -132,6 +132,11 @@ def test_pick_asset_macos(monkeypatch):
     assert eng._pick_asset(assets)["name"] == "stockfish-macos-m1-apple-silicon.tar"
     monkeypatch.setattr(eng.platform, "machine", lambda: "x86_64")
     assert eng._pick_asset(assets)["name"] == "stockfish-macos-x86-64-avx2.tar"
+    # Новые релизы: одна универсальная сборка для обеих архитектур.
+    new = [{"name": "stockfish-macos-universal.tar.gz"}, {"name": "stockfish-ubuntu-x86-64-avx2.tar"}]
+    for m in ("arm64", "x86_64"):
+        monkeypatch.setattr(eng.platform, "machine", lambda m=m: m)
+        assert eng._pick_asset(new)["name"] == "stockfish-macos-universal.tar.gz"
 
 
 def test_broken_binary_skipped(cfg, tmp_path, monkeypatch):

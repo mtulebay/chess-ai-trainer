@@ -69,10 +69,11 @@ def _pick_asset(assets: list[dict]) -> dict:
     arm = machine in ("aarch64", "arm64")
     if system == "Darwin":
         os_key = "macos"
-        prefs = [n for n in names if "macos" in n and ("apple-silicon" in n or "m1" in n)] if arm else []
-        if not arm:
-            prefs = [n for k in ("x86-64-bmi2", "x86-64-avx2", "x86-64.tar") for n in names
-                     if "macos" in n and k in n]
+        arch_keys = ("apple-silicon", "m1", "arm") if arm else ("x86-64-bmi2", "x86-64-avx2", "x86-64")
+        mac = [n for n in names if "macos" in n]
+        # Новые релизы — одна универсальная сборка (stockfish-macos-universal.tar.gz), старые — по архитектурам.
+        prefs = [n for n in mac if "universal" in n]
+        prefs += [n for k in arch_keys for n in mac if k in n and n not in prefs]
     elif system == "Linux":
         os_key = "ubuntu"
         if arm:
@@ -116,14 +117,16 @@ def download_stockfish() -> Path:
         else:
             with tarfile.open(archive) as t:
                 t.extractall(extract, filter="data")
-        bins = [p for p in extract.rglob("stockfish*") if p.is_file() and p.suffix not in (".nnue", ".txt", ".md")]
+        bins = [p for p in extract.rglob("stockfish*") if p.is_file()
+                and p.suffix.lower() not in (".nnue", ".txt", ".md", ".h", ".cpp", ".py", ".sh")]
         bins.sort(key=lambda p: p.stat().st_size, reverse=True)
-        if not bins:
-            raise RuntimeError("В архиве не найден бинарник stockfish")
         target = BIN_DIR / "stockfish"
-        shutil.copy2(bins[0], target)
-    target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    if not _runs(str(target)):
-        target.unlink()
-        raise RuntimeError(f"Скачанный {asset['name']} не запускается на этой машине")
-    return target
+        for cand in bins:
+            shutil.copy2(cand, target)
+            target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            if _runs(str(target)):
+                return target
+        if target.exists():
+            target.unlink()
+    raise RuntimeError(f"В {asset['name']} не нашлось бинарника, который запускается на этой машине "
+                       f"(кандидаты: {', '.join(p.name for p in bins) or 'нет'})")
